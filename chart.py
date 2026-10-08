@@ -41,11 +41,10 @@ def size_legend_values(sizes: pd.Series) -> list[tuple[float, float]]:
     plotly applies with sizemode='area'.
     """
     top = float(sizes.max())
-    out = []
-    for frac in (1.0, 0.35, 0.08):
-        value = top * frac
-        out.append((value, MAX_DIAMETER_PX * math.sqrt(frac)))
-    return out
+    return [
+        (top * frac, MAX_DIAMETER_PX * math.sqrt(frac))
+        for frac in (1.0, 0.35, 0.08)
+    ]
 
 
 def build_figure(
@@ -67,10 +66,10 @@ def build_figure(
         )
     )
 
-    # Selective direct labels — the biggest bubbles only. Labelling all twelve
+    # Selective direct labels — the biggest bubbles only. Labelling every one
     # would be a wall of text; the rest are covered by hover and the table view.
     # The labels ride the marker trace so plotly clears them past the bubble edge.
-    labelled = set(df.nlargest(label_top, COLS.size)[COLS.label]) if label_top else set()
+    labelled = set(df.nlargest(label_top, COLS.size)[COLS.label])
     text = [t if t in labelled else "" for t in df[COLS.label]]
     # Anchor labels away from the nearest edge so they never spill out of the plot.
     lo, hi = df[COLS.x].min(), df[COLS.x].max()
@@ -119,14 +118,11 @@ def build_figure(
     )
 
     if show_medians:
-        for axis, value in (("x", df[COLS.x].median()), ("y", df[COLS.y].median())):
-            line = dict(color=p["axis"], width=1, dash="dot")
-            if axis == "x":
-                fig.add_vline(x=value, line=line, layer="below")
-            else:
-                fig.add_hline(y=value, line=line, layer="below")
+        line = dict(color=p["axis"], width=1, dash="dot")
+        fig.add_vline(x=df[COLS.x].median(), line=line, layer="below")
+        fig.add_hline(y=df[COLS.y].median(), line=line, layer="below")
 
-    tickvals = sorted(df[COLS.y])
+    y_ticks = _nice_duration_ticks(df[COLS.y].max())
     fig.update_layout(
         height=560,
         margin=dict(l=8, r=8, t=8, b=8),
@@ -135,9 +131,11 @@ def build_figure(
         font=dict(family=FONT, size=13, color=p["text_secondary"]),
         showlegend=False,
         hovermode="closest",
-        dragmode="pan",
+        # A fixed view: the mouse only hovers, it never pans or zooms.
+        dragmode=False,
     )
     fig.update_xaxes(
+        fixedrange=True,
         title=dict(text="Views", font=dict(color=p["text_secondary"], size=13)),
         type="log" if log_x else "linear",
         rangemode="tozero" if not log_x else "normal",
@@ -151,14 +149,15 @@ def build_figure(
         ticklen=4,
     )
     fig.update_yaxes(
+        fixedrange=True,
         title=dict(
             text="Engagement — average view duration",
             font=dict(color=p["text_secondary"], size=13),
         ),
         rangemode="tozero",
         tickmode="array",
-        tickvals=_nice_duration_ticks(tickvals),
-        ticktext=[fmt_duration(v) for v in _nice_duration_ticks(tickvals)],
+        tickvals=y_ticks,
+        ticktext=[fmt_duration(v) for v in y_ticks],
         gridcolor=p["grid"],
         zeroline=False,
         linecolor=p["axis"],
@@ -170,8 +169,7 @@ def build_figure(
     return fig
 
 
-def _nice_duration_ticks(values: list[float]) -> list[int]:
+def _nice_duration_ticks(top: float) -> list[int]:
     """Ticks every 60s (or 120s if that would crowd), covering the data."""
-    top = max(values) if values else 60
     step = 60 if top <= 420 else 120
     return list(range(0, int(top) + step, step))
