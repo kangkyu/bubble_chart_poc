@@ -1,15 +1,19 @@
 """Metric source for the bubble chart.
 
-The rows are hard-coded for now. When the backend lands, replace the body of
-`fetch_metrics()` with the HTTP call and keep the returned column names —
-everything downstream depends only on the names in `Columns`.
+Rows come from slide-gen-reports' ``POST /v1/traffic_source/videos`` at
+``REPORTS_API_URL``, the service's base URL; requests carry
+``REPORTS_API_TOKEN`` as a bearer token. Everything downstream depends only on
+the names in `Columns`.
 """
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 
 import pandas as pd
+import requests
 
 
 @dataclass(frozen=True)
@@ -24,30 +28,37 @@ class Columns:
 
 COLS = Columns()
 
-_ROWS = [
-    # title,                                 views,   avg view duration (s), watch time (min)
-    ("Barbie Dreamhouse Tour",             1_842_000,  212,  6_508_400),
-    ("Hot Wheels City Mega Loop",           2_610_000,  138,  6_003_000),
-    ("Polly Pocket Compact Reveal",           412_000,  254,  1_744_133),
-    ("Monster High Doll Unboxing",            887_000,  301,  4_450_783),
-    ("Uno Extreme Family Game Night",         196_000,  176,    574_933),
-    ("Mega Bloks Build Challenge",            338_000,   94,    529_533),
-    ("Fisher-Price Laugh & Learn Songs",    4_120_000,   67,  4_600_667),
-    ("Masters of the Universe Origins",       154_000,  388,    995_733),
-    ("Barbie Extra Fashion Haul",             963_000,  145,  2_327_250),
-    ("Hot Wheels Monster Trucks Live",        721_000,  233,  2_800_217),
-    ("Thomas & Friends Track Builder",      1_355_000,  118,  2_664_833),
-    ("Matchbox Action Drivers Playset",       268_000,  161,    719_133),
-]
+# slide-gen-reports field -> chart column. The API has no titles, so the
+# video ID is the row label.
+_API_FIELDS = {
+    "video_id": COLS.label,
+    "views": COLS.x,
+    "average_view_duration_seconds": COLS.y,
+    "watch_time_minutes": COLS.size,
+}
+
+VIDEO_ID = re.compile(r"^[\w-]{11}$")
 
 
-def fetch_metrics() -> pd.DataFrame:
-    """Return one row per video with the three plotted metrics.
+def fetch_metrics(
+    video_ids: tuple[str, ...], *, days: int = 7, timeout: float = 60
+) -> pd.DataFrame:
+    """Return one row per given video with the three plotted metrics.
 
-    Swap point for the backend: build the same DataFrame from the endpoint
-    response, e.g.::
-
-        resp = httpx.get(f"{API}/analytics/videos", params={...}).json()
-        return pd.DataFrame(resp["rows"])[[COLS.label, COLS.x, COLS.y, COLS.size]]
+    Over the latest ``days`` report dates. Videos without views are left out.
     """
-    return pd.DataFrame(_ROWS, columns=[COLS.label, COLS.x, COLS.y, COLS.size])
+    base = os.environ.get("REPORTS_API_URL")
+    if not base:
+        raise RuntimeError("REPORTS_API_URL is not set")
+
+    # A POST, as the list of IDs can be long.
+    resp = requests.post(
+        f"{base.rstrip('/')}/v1/traffic_source/videos",
+        json={"video_ids": list(video_ids), "days": days},
+        headers={"Authorization": f"Bearer {os.environ.get('REPORTS_API_TOKEN', '')}"},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+
+    df = pd.DataFrame(resp.json()["videos"], columns=list(_API_FIELDS))
+    return df.rename(columns=_API_FIELDS)
